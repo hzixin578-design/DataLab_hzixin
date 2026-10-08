@@ -259,7 +259,17 @@ int mul5Sat(int x) {
  *   Rating: 7
  */
 int classifyAdd3(int x, int y, int z) {
-  return 14;
+  // 先算低 32 位的和：s2 = (x + y + z) mod 2^32
+int s1,s2,c1,c2,carry,m,sign_s,k;
+  s1 = x + y;
+  s2 = s1 + z;
+  c1 = ((x & y) | ((x | y) & ~s1)) >> 31 & 1;
+  c2 = ((s1 & z) | ((s1 | z) & ~s2)) >> 31 & 1;
+  carry = c1 + c2;
+  m = ((x >> 31) & 1) + ((y >> 31) & 1) + ((z >> 31) & 1);
+  sign_s = (s2 >> 31) & 1;
+  k = carry + sign_s + ~m + 1;
+  return (k >> 31) | (!!k);
 }
 
 // P15
@@ -279,7 +289,37 @@ unsigned floatScaleThreeHalves(unsigned uf) {
   unsigned sign = uf&0x80000000;
   unsigned exp = (uf>>23)&0xff;
   unsigned frac = uf&0x7fffff;
-
+  int N,S;
+  int res_exp,res_frac;
+  if(exp==0xff)return uf;
+  if(exp==0){
+    N = frac*3;
+    S = (N>>1)+((N&1)&&((N>>1)&1));
+    if(S>=0x800000){
+      res_exp = 1;
+      res_frac = S-0x800000;
+    }else{
+      res_exp = 0;
+      res_frac = S;
+    }
+  }else{
+    N = (frac|0x800000)*3;
+    if(N>=0x2000000){
+      S = (N>>2)+(((N&3)>2)||(((N&3)==2)&((N>>2)&1)));
+      res_exp = exp+1;
+      res_frac = S-0x800000;
+    }else{
+      S = (N>>1)+((N&1)&&((N>>1)&1));
+      res_exp = exp;
+      if(S>=0x1000000){
+        res_exp++;
+        S = 0x800000;
+      }
+      res_frac = S-0x800000;
+    }
+  }
+  if(res_exp>=0xff)return sign|0x7f800000;
+  return sign|(res_exp<<23)|res_frac;
 }
 
 // P16
@@ -295,9 +335,51 @@ unsigned floatScaleThreeHalves(unsigned uf) {
  *   Rating: 10
  */
 unsigned floatRoundEven(unsigned uf) {
-  return 16;
-}
+  unsigned sign = uf & 0x80000000;
+  unsigned exp = (uf >> 23) & 0xFF;
+  unsigned frac = uf & 0x7FFFFF;
+  int E;
+  int shift;
+  unsigned round_bits, half;
+  int increment = 0;
+  if (exp == 0xFF) return uf;         
+  if (exp == 0) return sign;         
+  E = exp - 127;
+  if (E < -1) return sign;           
+  if (E == -1) {                      
+    if (frac == 0) return sign;       
+    return sign | (127 << 23);        
+  }
+  if (E >= 23) return uf;          
+  if (E == 0) {
+    if (frac >= 0x400000) {            
+      return sign | (128 << 23);
+    } else {
+      return sign | (127 << 23);       
+    }
+  }
+  shift = 23 - E;                      
+  round_bits = frac & ((1 << shift) - 1);
+  half = 1 << (shift - 1);
+  if (round_bits > half) {
+    increment = 1;
+  } else if (round_bits == half) {
+    if (frac & (1 << shift)) {        
+      increment = 1;
+    }
+  }
+  if (increment) {
+    frac += (1 << shift);             
+    if (frac >= (1 << 23)) {           
+      frac = 0;
+      exp++;
+      if (exp == 0xFF) return sign | (0xFF << 23);
+    }
+  }
 
+  frac = frac & ~((1 << shift) - 1);
+  return sign | (exp << 23) | frac;
+}
 // P17
 /*
  * float_i2f - Return bit-level equivalent of expression (float) x.
@@ -386,17 +468,19 @@ int bitCount(int x) {
  *   Max ops: 34
  *   Rating: 10
  */
-int bitReverse(int x)
-{
-  int re1;
-  int re2;
-  int re3;
-  int re4;
-  int re5;
-  re1 = ((x>>1)&0x55555555)|((x&0x55555555)<<1);
-  re2 = ((re1>>2)&0x33333333)|((re1&0x33333333)<<2);
-  re3 = ((re2>>4)&0x0f0f0f0f)|((re2&0x0f0f0f0f)<<4);
-  re4 = ((re3>>8)&0x00ff00ff)|((re3&0x00ff00ff)<<8);
-  re5 = ((re4>>16)&0x0000ffff)|((re4&0x0000ffff)<<16);
-  return re5;
+int bitReverse(int x) {
+  int m1 = 0x55 | (0x55 << 8);
+  m1 = m1 | (m1 << 16);
+  int m2 = 0x33 | (0x33 << 8);
+  m2 = m2 | (m2 << 16);
+  int m4 = 0x0F | (0x0F << 8);
+  m4 = m4 | (m4 << 16);
+  int m8 = 0xFF | (0xFF << 16);
+  int m16 = 0xFF | (0xFF << 8);
+  x = ((x >> 1) & m1) | ((x & m1) << 1);
+  x = ((x >> 2) & m2) | ((x & m2) << 2);
+  x = ((x >> 4) & m4) | ((x & m4) << 4);
+  x = ((x >> 8) & m8) | ((x & m8) << 8);
+  x = ((x >> 16) & m16) | (x << 16);
+  return x;
 }
